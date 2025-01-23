@@ -49,7 +49,12 @@ router.post("/allocate-orders", authenticateToken, async (req, res) => {
         console.warn(`Skipping order for Team ${teamId}: Missing required fields or ordersCount is 0`);
         continue;
       }
-  
+      const team = await Team.findOne({ teamId });
+      if (!team) {
+        console.warn(`No team found for TeamID: ${teamId}`);
+        continue;
+      }
+      const teamName = team.teamName;
       console.log(`Processing Admin Order: TeamID=${teamId}, Date=${date}, Count=${ordersCount}`);
   
       // Find unallocated orders for the given date & order type
@@ -72,6 +77,7 @@ router.post("/allocate-orders", authenticateToken, async (req, res) => {
         {
           $set: {
             "team.teamId": teamId,
+            "team.teamName":teamName, // Assuming teamName is unique
             "team.allocateDate": new Date(),
             status: "Allocated",
           },

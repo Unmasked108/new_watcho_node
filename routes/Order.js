@@ -88,23 +88,40 @@ router.post("/allocate-orders", authenticateToken, async (req, res) => {
    */
   async function allocateOrdersAsTeamLeader(ordersData) {
     for (const order of ordersData) {
-      const { date, teamId, memberId, orderType, ordersCount } = order;
+      const { 
+        date, 
+        teamId, 
+        memberId, 
+        memberName,  // Add this
+        orderType, 
+        ordersCount 
+      } = order;
   
-      console.log(`Processing TeamLeader Order: TeamID=${teamId}, MemberID=${memberId}, Date=${date}, Count=${ordersCount}`);
+      console.log(`Processing TeamLeader Order: 
+        TeamID=${teamId}, 
+        MemberID=${memberId}, 
+        MemberName=${memberName},  // Log memberName
+        Date=${date}, 
+        Count=${ordersCount}`);
   
-      if (!date || !teamId || !memberId || !orderType) {
+      if (!date || !teamId || !memberId || !memberName || !orderType) {
         console.warn("Skipping order: Missing required fields");
         continue;
       }
   
-      // Find allocated orders without a member assigned
-      const availableOrders = await Order.find({
-        "team.teamId": teamId, // Orders already allocated to this team
-        "member.memberId": { $exists: false }, // Orders that are not yet assigned
-        orderType,
-        status: "Allocated",
-        createdAt: { $gte: new Date(date) },
-      }).limit(ordersCount);
+      const startOfDay = new Date(date);
+startOfDay.setHours(0, 0, 0, 0); // Set to 00:00:00 of that day
+
+const endOfDay = new Date(date);
+endOfDay.setHours(23, 59, 59, 999); // Set to 23:59:59 of that day
+
+const availableOrders = await Order.find({
+  "team.teamId": teamId,
+  "member.memberId": { $exists: false },
+  orderType,
+  status: "Allocated",
+  createdAt: { $gte: startOfDay, $lte: endOfDay },
+}).limit(ordersCount);
   
       if (availableOrders.length === 0) {
         console.log(`No available orders for Team ${teamId} on Date: ${date}`);
@@ -118,16 +135,16 @@ router.post("/allocate-orders", authenticateToken, async (req, res) => {
         {
           $set: {
             "member.memberId": memberId,
+            "member.memberName": memberName,  // Add memberName
             "member.allocateDate": new Date(),
             status: "Assign",
           },
         }
       );
   
-      console.log(`Assigned ${availableOrders.length} orders to Member ${memberId} in Team ${teamId}`);
+      console.log(`Assigned ${availableOrders.length} orders to Member ${memberId} (${memberName}) in Team ${teamId}`);
     }
   }
-  
 
 
 // Route to create a new order
@@ -251,6 +268,11 @@ router.post('/orders', authenticateToken, async (req, res) => {
         console.warn("Skipping order: Missing required fields");
         continue;
       }
+      const startOfDay = new Date(date);
+      startOfDay.setHours(0, 0, 0, 0); // Set to 00:00:00 of that day
+      
+      const endOfDay = new Date(date);
+      endOfDay.setHours(23, 59, 59, 999); // Set to 23:59:59 of that day
   
       // Find orders assigned to members but NOT Completed or Verified
       let query = {
@@ -258,7 +280,7 @@ router.post('/orders', authenticateToken, async (req, res) => {
         "member.memberId": { $exists: true },
         status: { $nin: ["Completed", "Verified"] },
         orderType,
-        createdAt: { $gte: new Date(date) },
+        createdAt: { $gte: startOfDay, $lte: endOfDay },
       };
   
       let ordersToUnallocate = ordersCount
@@ -281,6 +303,132 @@ router.post('/orders', authenticateToken, async (req, res) => {
   
       console.log(`Unallocated ${ordersToUnallocate.length} orders from members in Team ${teamId}.`);
     }
-  }
+  };
+
+
+  /**
+   * GET API for fetching order details based on user role.
+   */
+  /**
+ * GET API for fetching order details based on user role.
+ */
+  router.get("/fetch-orders", authenticateToken, async (req, res) => {
+    try {
+      const { id, role } = req.user; // Extract user ID & role from JWT
+      const { date, endDate, teamId, teamIds, memberId, memberName, orderType } = req.query;
+  
+      console.log(`Received request: UserRole=${role}, UserId=${id}`);
+      console.log(`Request Query Parameters:`, req.query);
+  
+      if (!date || !orderType) {
+        console.log("Error: Date and orderType are required.");
+        return res.status(400).json({ error: "Date and orderType are required." });
+      }
+  
+      const startDate = new Date(date); // Start of the day
+      const end = endDate ? new Date(endDate) : new Date(date); // End of the day or specified endDate
+  
+      // Adjust times to cover the full day
+      startDate.setHours(0, 0, 0, 0);
+      end.setHours(23, 59, 59, 999);
+  
+      let query = {
+        orderType: Number(orderType),
+        createdAt: { $gte: startDate, $lte: end },
+      };
+  
+      console.log("Base query object:", query);
+  
+      if (role === "Admin") {
+        if (!teamIds || !Array.isArray(JSON.parse(teamIds))) {
+          console.log("Error: Invalid or missing teamIds.");
+          return res.status(400).json({ error: "Invalid or missing teamIds." });
+        }
+  
+        query["team.teamId"] = { $in: JSON.parse(teamIds) };
+  
+        console.log("Admin Query after adding teamIds filter:", query);
+  
+        // Get allocated count and completion count per team
+        const teamCounts = await Promise.all(
+          JSON.parse(teamIds).map(async (teamId) => {
+            const allocatedCount = await Order.countDocuments({
+              ...query,
+              "team.teamId": teamId,
+              status: "Allocated",
+            });
+            const completionCount = await Order.countDocuments({
+              ...query,
+              "team.teamId": teamId,
+              status: { $in: ["Completed", "Verified"] },
+            });
+            return { teamId, allocatedCount, completionCount };
+          })
+        );
+  
+        const response = {
+          success: true,
+          role,
+          teamCounts, // Return counts per team
+        };
+        console.log("Response for Admin:", response);
+        return res.json(response);
+      } else if (role === "TeamLeader") {
+        if (!teamId) {
+          return res.status(400).json({ error: "TeamId is required." });
+        }
+  
+        query["team.teamId"] = teamId;
+  
+        // Get allocated count and completion count for the team
+        const teamAllocatedCount = await Order.countDocuments({ ...query, status: "Allocated" });
+  
+        // Fetch members in the team
+        const membersWithCounts = await Order.aggregate([
+          { 
+            $match: { 
+              ...query,
+              "team.teamId": teamId,
+              "member.memberId": { $exists: true }
+            }
+          },
+          { 
+            $group: {
+              _id: "$member.memberId",
+              memberName: { $first: "$member.memberName" },
+              assignedCount: { 
+                $sum: { $cond: [{ $eq: ["$status", "Assign"] }, 1, 0] } 
+              },
+              completedCount: { 
+                $sum: { $cond: [{ $in: ["$status", ["Completed", "Verified"]] }, 1, 0] } 
+              }
+            }
+          }
+        ]);
+  
+        const teamCompletionCount = await Order.countDocuments({
+          ...query,
+          status: { $in: ["Completed", "Verified"] },
+        });
+  
+        const response = {
+          success: true,
+          role,
+          teamAllocatedCount,
+          teamCompletionCount,
+          memberCounts: membersWithCounts
+        };
+  
+        return res.json(response);
+      } 
+      
+      // ... [rest of the code remains the same]
+    } catch (error) {
+      console.error("Error fetching orders:", error);
+      res.status(500).json({ error: "Internal server error." });
+    }
+  });
+  
+  
   
   module.exports = router;

@@ -49,7 +49,12 @@ router.post("/allocate-orders", authenticateToken, async (req, res) => {
         console.warn(`Skipping order for Team ${teamId}: Missing required fields or ordersCount is 0`);
         continue;
       }
-  
+      const team = await Team.findOne({ teamId });
+      if (!team) {
+        console.warn(`No team found for TeamID: ${teamId}`);
+        continue;
+      }
+      const teamName = team.teamName;
       console.log(`Processing Admin Order: TeamID=${teamId}, Date=${date}, Count=${ordersCount}`);
   
       // Find unallocated orders for the given date & order type
@@ -72,6 +77,7 @@ router.post("/allocate-orders", authenticateToken, async (req, res) => {
         {
           $set: {
             "team.teamId": teamId,
+            "team.teamName":teamName, // Assuming teamName is unique
             "team.allocateDate": new Date(),
             status: "Allocated",
           },
@@ -96,7 +102,12 @@ router.post("/allocate-orders", authenticateToken, async (req, res) => {
         console.warn("Skipping order: Missing required fields");
         continue;
       }
-  
+      const member = await User.findById(memberId);
+      if (!member) {
+        console.warn(`No member found for MemberID: ${memberId}`);
+        continue;
+      }
+      const memberName = member.name;
       // Find allocated orders without a member assigned
       const availableOrders = await Order.find({
         "team.teamId": teamId, // Orders already allocated to this team
@@ -118,6 +129,7 @@ router.post("/allocate-orders", authenticateToken, async (req, res) => {
         {
           $set: {
             "member.memberId": memberId,
+            "member.memberName": memberName, // Assuming memberName is unique
             "member.allocateDate": new Date(),
             status: "Assign",
           },
@@ -282,5 +294,125 @@ router.post('/orders', authenticateToken, async (req, res) => {
       console.log(`Unallocated ${ordersToUnallocate.length} orders from members in Team ${teamId}.`);
     }
   }
+
+
+  router.get('/orders', authenticateToken, async (req, res) => {
+    try {
+      const { date, paidStatus, teamName, orderType } = req.query;
+      console.log('details from frontend:', req.query);
+      console.log('User role:', req.user.role);
+  
+      let filter = {};
+  
+      // Role-Based Filtering (Admin and TeamLeader only)
+      if (req.user.role === 'Admin') {
+        if (date) {
+          const startOfDay = new Date(date);
+          const endOfDay = new Date(date);
+          endOfDay.setHours(23, 59, 59, 999);
+          filter['createdAt'] = { $gte: startOfDay, $lte: endOfDay };
+        }
+        if (teamName) {
+          filter['team.teamName'] = teamName;
+        }
+      } else if (req.user.role === 'TeamLeader') {
+        filter['team.teamId'] = req.user.teamId;
+        if (date) {
+          const startOfDay = new Date(date);
+          const endOfDay = new Date(date);
+          endOfDay.setHours(23, 59, 59, 999);
+          filter['createdAt'] = { $gte: startOfDay, $lte: endOfDay };
+        }
+      }
+  
+      // Additional filters
+      if (paidStatus) {
+        // Map `paidStatus` to corresponding statuses
+        if (paidStatus === 'Paid') {
+          filter['status'] = { $in: ['Completed', 'Verified'] }; // Paid -> Completed, Verified
+        } else if (paidStatus === 'Unpaid') {
+          filter['status'] = { $in: ['Allocated', 'Assign'] }; // Unpaid -> Allocated, Assign
+        }
+      } else {
+        // Default to all relevant statuses if `paidStatus` is not provided
+        filter['status'] = { $in: ['Allocated', 'Assign', 'Completed', 'Verified'] };
+      }
+      if (orderType) {
+        filter['orderType'] = orderType;
+      }
+  
+      // Fetching orders
+      const orders = await Order.find(filter).select(
+        'orderId status coupon link orderType team profit'
+      );
+  
+      console.log('Raw orders fetched:', orders);
+  
+      // Transform data
+      const transformedOrders = orders.map((order) => ({
+        orderId: order.orderId,
+        status: order.status,
+        coupon: order.coupon,
+        link: order.link,
+        orderType: order.orderType,
+        teamId: order.team?.teamId || null,
+        teamName: order.team?.teamName || null,
+        teamCompletionDate: order.team?.completionDate || null,
+        profitBehindOrder: order.profit?.profitBehindOrder || null,
+        membersProfit: order.profit?.membersProfit || null,
+      }));
+  
+      console.log('Transformed orders:', transformedOrders);
+  
+      // Return the transformed orders
+      res.status(200).json(transformedOrders);
+    } catch (error) {
+      console.error('Error fetching orders:', error);
+      res.status(500).json({ message: 'Server error', error: error.message });
+    }
+  });
+  router.get('/orders/count', authenticateToken, async (req, res) => {
+    try {
+      const { date, teamName } = req.query; // Date in YYYY-MM-DD format and optional teamName
+  
+      if (!date) {
+        return res.status(400).json({ message: 'Date is required' });
+      }
+  
+      // Convert the date to the start and end of the day
+      const startOfDay = new Date(date);
+      const endOfDay = new Date(date);
+      endOfDay.setHours(23, 59, 59, 999); // Set to the end of the day
+  
+      // Initialize the base query
+      let query = {
+        createdAt: { $gte: startOfDay, $lte: endOfDay },
+      };
+  
+      // Add the teamName filter if provided
+      if (teamName) {
+        query['team.teamName'] = teamName;
+      }
+  
+      // Query for total orders
+      const totalOrders = await Order.countDocuments(query);
+  
+      // Query for total allocated orders
+      const totalAllocatedLeads = await Order.countDocuments({
+        ...query,
+        status: 'Allocated',
+      });
+  
+      // Send response
+      res.status(200).json({
+        totalOrders,
+        totalAllocatedLeads,
+      });
+    } catch (error) {
+      console.error('Error fetching orders count:', error);
+      res.status(500).json({ message: 'Server error', error: error.message });
+    }
+  });
+  
   
   module.exports = router;

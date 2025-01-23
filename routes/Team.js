@@ -1,7 +1,7 @@
 const express = require('express');
-const Team = require('../models/teams'); // Import the Team model
+const Team = require('../models/team'); // Import the Team model
 const router = express.Router();
-const { authenticateToken } = require('./jwt');
+const { authenticateToken } = require('./Jwt');
 const User = require('../models/user'); // Import the User model
 const mongoose = require('mongoose');
 

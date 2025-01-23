@@ -3,7 +3,7 @@ const connectDB = require('./db');
 const cors = require('cors');
 require('dotenv').config();
 const router=require('./routes/User')
-const teamsRouter = require('./routes/Teams'); // Import the new teams router
+const teamsRouter = require('./routes/Team'); // Import the new teams router
 const ordersRouter = require('./routes/Order'); // Import the orders router
 // Import the allocation router
 

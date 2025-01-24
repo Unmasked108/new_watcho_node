@@ -78,7 +78,7 @@ router.post("/allocate-orders", authenticateToken, async (req, res) => {
           $set: {
             "team.teamId": teamId,
             "team.teamName":teamName, // Assuming teamName is unique
-            "team.allocateDate": new Date(),
+            "team.allocateDate": date(),
             status: "Allocated",
           },
         }
@@ -298,7 +298,7 @@ router.post('/orders', authenticateToken, async (req, res) => {
 
   router.get('/orders', authenticateToken, async (req, res) => {
     try {
-      const { date, paidStatus, teamName, orderType } = req.query;
+      const { date, paidStatus, teamName, orderType,teamId } = req.query;
       console.log('details from frontend:', req.query);
       console.log('User role:', req.user.role);
   
@@ -310,18 +310,18 @@ router.post('/orders', authenticateToken, async (req, res) => {
           const startOfDay = new Date(date);
           const endOfDay = new Date(date);
           endOfDay.setHours(23, 59, 59, 999);
-          filter['createdAt'] = { $gte: startOfDay, $lte: endOfDay };
+          filter['team.allocateDate'] = { $gte: startOfDay, $lte: endOfDay };
         }
         if (teamName) {
           filter['team.teamName'] = teamName;
         }
       } else if (req.user.role === 'TeamLeader') {
-        filter['team.teamId'] = req.user.teamId;
+        filter['team.teamId'] = teamId;
         if (date) {
           const startOfDay = new Date(date);
           const endOfDay = new Date(date);
           endOfDay.setHours(23, 59, 59, 999);
-          filter['createdAt'] = { $gte: startOfDay, $lte: endOfDay };
+          filter['team.allocateDate'] = { $gte: startOfDay, $lte: endOfDay };
         }
       }
   
@@ -400,7 +400,7 @@ router.post('/orders', authenticateToken, async (req, res) => {
       // Query for total allocated orders
       const totalAllocatedLeads = await Order.countDocuments({
         ...query,
-        status: 'Allocated',
+        status: { $in: ['Allocated', 'Assign'] }, 
       });
   
       // Send response

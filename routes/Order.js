@@ -435,6 +435,177 @@ router.post('/orders', authenticateToken, async (req, res) => {
     }
   });
   
-  
+
+// Fetch allocated leads
+router.get('/allocated-leads', authenticateToken, async (req, res) => {
+  try {
+    const userId = req.user.id; // Extract user ID from token
+    const { date } = req.query; // Extract date from query params
+
+    console.log('Received userId:', userId);
+    console.log('Received date:', date);
+
+    if (!userId) {
+      return res.status(400).json({ error: 'User ID not found' });
+    }
+
+    // Build query for fetching orders
+    const query = { "member.memberId": userId };
+    if (date) {
+      const startOfDay = new Date(date);
+      startOfDay.setHours(0, 0, 0, 0);
+      const endOfDay = new Date(date);
+      endOfDay.setHours(23, 59, 59, 999);
+      query["member.allocateDate"] = { $gte: startOfDay, $lte: endOfDay };
+    }
+
+    // Fetch orders
+    const orders = await Order.find(query, 'orderId link status');
+    console.log('Fetched orders:', orders);
+
+    // Count allocated leads
+    const allocatedLeadCounts = orders.length;
+
+    // Count completed orders (status is 'Completed' or 'Verified')
+    const completedCount = orders.filter(
+      (order) => order.status === 'Completed' || order.status === 'Verified'
+    ).length;
+
+    console.log('Allocated lead count:', allocatedLeadCounts);
+    console.log('Completed count:', completedCount);
+
+    return res.json({ allocatedLeadCounts, completedCount, orders });
+  } catch (error) {
+    console.error('Error fetching allocated leads:', error);
+    return res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+// Update payment status and order status
+// Update order status
+router.patch('/update-order-status', authenticateToken, async (req, res) => {
+  try {
+    const { orderId } = req.body;
+
+    console.log('Received orderId for update:', orderId);
+
+    if (!orderId) {
+      return res.status(400).json({ message: 'Order ID is required' });
+    }
+
+    const order = await Order.findOne({ orderId });
+
+    if (!order) {
+      return res.status(404).json({ message: 'Order not found' });
+    }
+
+    console.log('Fetched order:', order);
+
+    // If the status is already 'Completed', return early
+    if (order.status === 'Completed') {
+      console.log('Order already marked as Completed:', order);
+      return res.status(400).json({ message: 'Order status already updated to Completed' });
+    }
+
+    // Update status from 'Assign' to 'Completed'
+    if (order.status === 'Assign') {
+      order.status = 'Completed';
+      console.log('Order status updated to Completed:', order);
+    }
+
+    await order.save();
+    console.log('Updated order:', order);
+
+    // Recalculate the allocated lead counts and completed count after status update
+    const userId = req.user.id; // Extract user ID from token
+    console.log('Extracted userId:', userId);
+
+    if (!userId) {
+      return res.status(400).json({ message: 'User ID not found' });
+    }
+
+    const orders = await Order.find({ "member.memberId": userId });
+    console.log('Orders fetched for userId:', userId);
+    console.log('Orders:', orders);
+
+    const allocatedLeadCounts = orders.length;
+    const completedCount = orders.filter(
+      (order) => order.status === 'Completed' || order.status === 'Verified'
+    ).length;
+
+    console.log('Recalculated allocated lead count:', allocatedLeadCounts);
+    console.log('Recalculated completed count:', completedCount);
+
+    res.status(200).json({
+      message: 'Order status updated successfully',
+      order,
+      allocatedLeadCounts,
+      completedCount,
+    });
+  } catch (error) {
+    console.error('Error updating order status:', error);
+    res.status(500).json({ message: 'Internal Server Error' });
+  }
+});
+
+// Revert order status
+router.patch('/revert-order-status', authenticateToken, async (req, res) => {
+  try {
+    const { orderId } = req.body;
+
+    console.log('Received orderId for revert:', orderId);
+
+    if (!orderId) {
+      return res.status(400).json({ message: 'Order ID is required' });
+    }
+
+    const order = await Order.findOne({ orderId });
+
+    if (!order) {
+      return res.status(404).json({ message: 'Order not found' });
+    }
+
+    console.log('Fetched order for revert:', order);
+
+    // Revert status from 'Completed' to 'Assign'
+    if (order.status === 'Completed') {
+      order.status = 'Assign';
+      console.log('Order status reverted to Assign:', order);
+    }
+
+    await order.save();
+    console.log('Reverted order:', order);
+
+    // Recalculate the allocated lead counts and completed count after status revert
+    const userId = req.user.id; // Extract user ID from token
+    console.log('Extracted userId:', userId);
+
+    if (!userId) {
+      return res.status(400).json({ message: 'User ID not found' });
+    }
+
+    const orders = await Order.find({ "member.memberId": userId });
+    console.log('Orders fetched for userId:', userId);
+    console.log('Orders:', orders);
+
+    const allocatedLeadCounts = orders.length;
+    const completedCount = orders.filter(
+      (order) => order.status === 'Completed' || order.status === 'Verified'
+    ).length;
+
+    console.log('Recalculated allocated lead count:', allocatedLeadCounts);
+    console.log('Recalculated completed count:', completedCount);
+
+    res.status(200).json({
+      message: 'Order status reverted successfully',
+      order,
+      allocatedLeadCounts,
+      completedCount,
+    });
+  } catch (error) {
+    console.error('Error reverting order status:', error);
+    res.status(500).json({ message: 'Internal Server Error' });
+  }
+});
+
   
   module.exports = router;

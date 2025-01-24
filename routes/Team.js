@@ -110,11 +110,14 @@ router.get('/teams', authenticateToken, async (req, res) => {
     // Transform the populated data to include the member names
     teams = teams.map(team => {
       const membersList = team.membersList.map(member => ({
+        memberId: member.userId._id, // Add memberId (userId in this case)
         userId: member.userId._id, // Keep userId
         name: member.userId.name, // Include the member name
       }));
       return {
         ...team.toObject(),
+        teamId: team.teamId, // Add the frontend teamId
+
         membersList,
         teamLeaderName: team.teamLeader?.name || 'Unknown Leader', // Add teamLeaderName
       };

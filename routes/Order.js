@@ -665,7 +665,7 @@ router.patch('/revert-order-status', authenticateToken, async (req, res) => {
 
 router.get('/orders', authenticateToken, async (req, res) => {
   try {
-    const { date, paidStatus, teamName, orderType } = req.query;
+    const { date, paidStatus, teamName, orderType,teamId } = req.query;
     console.log('details from frontend:', req.query);
     console.log('User role:', req.user.role);
 
@@ -677,18 +677,18 @@ router.get('/orders', authenticateToken, async (req, res) => {
         const startOfDay = new Date(date);
         const endOfDay = new Date(date);
         endOfDay.setHours(23, 59, 59, 999);
-        filter['createdAt'] = { $gte: startOfDay, $lte: endOfDay };
+        filter['team.allocateDate'] = { $gte: startOfDay, $lte: endOfDay };
       }
       if (teamName) {
         filter['team.teamName'] = teamName;
       }
     } else if (req.user.role === 'TeamLeader') {
-      filter['team.teamId'] = req.user.teamId;
+      filter['team.teamId'] = teamId;
       if (date) {
         const startOfDay = new Date(date);
         const endOfDay = new Date(date);
         endOfDay.setHours(23, 59, 59, 999);
-        filter['createdAt'] = { $gte: startOfDay, $lte: endOfDay };
+        filter['team.allocateDate'] = { $gte: startOfDay, $lte: endOfDay };
       }
     }
 
@@ -718,7 +718,7 @@ router.get('/orders', authenticateToken, async (req, res) => {
     // Transform data
     const transformedOrders = orders.map((order) => ({
       orderId: order.orderId,
-      status: order.status,
+      paymentStatus: ["Completed", "Verified"].includes(order.status) ? "Paid" : "Unpaid",
       coupon: order.coupon,
       link: order.link,
       orderType: order.orderType,
@@ -767,7 +767,7 @@ router.get('/orders/count', authenticateToken, async (req, res) => {
     // Query for total allocated orders
     const totalAllocatedLeads = await Order.countDocuments({
       ...query,
-      status: 'Allocated',
+      status: { $in: ['Allocated', 'Assign'] }, 
     });
 
     // Send response

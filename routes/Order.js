@@ -41,6 +41,7 @@ router.post("/allocate-orders", authenticateToken, async (req, res) => {
    * Admin Order Allocation - Assigns orders to teams
    */
   async function allocateOrdersAsAdmin(ordersData) {
+    
     for (const order of ordersData) {
       const { date, teamId, orderType, ordersCount } = order;
       
@@ -78,7 +79,7 @@ router.post("/allocate-orders", authenticateToken, async (req, res) => {
           $set: {
             "team.teamId": teamId,
             "team.teamName":teamName, // Assuming teamName is unique
-            "team.allocateDate": new Date(),
+            "team.allocateDate": new Date(date),
             status: "Allocated",
           },
         }
@@ -333,12 +334,22 @@ router.post('/orders', authenticateToken, async (req, res) => {
         return res.status(400).json({ error: "Date and orderType are required." });
       }
   
-      const startDate = new Date(date); // Start of the day
-      const end = endDate ? new Date(endDate) : new Date(date); // End of the day or specified endDate
-  
-      // Adjust times to cover the full day
-      startDate.setHours(0, 0, 0, 0);
-      end.setHours(23, 59, 59, 999);
+      const startDate = new Date(date);
+      const end = endDate ? new Date(endDate) : new Date(date);
+      
+      // Check if it's a single-day query (startDate === endDate)
+      if (!endDate || startDate.toISOString() === end.toISOString()) {
+        // No timezone adjustment: Keep the start and end within the same day
+        startDate.setHours(0, 0, 0, 0); // Start of the day
+        end.setHours(23, 59, 59, 999); // End of the same day
+      } else {
+        // Multi-day range query: Adjust start and end times
+        startDate.setHours(0, 0, 0, 0); // Start of the first day
+        end.setHours(23, 59, 59, 999); // End of the last day
+      }
+      
+      console.log("Adjusted date range:", { startDate, end });
+      
   
       let query = {
         orderType: Number(orderType),
@@ -384,20 +395,44 @@ console.log("Order Type 299 Count:", orderType299Count);
         // Get allocated count and completion count per team
         const teamCounts = await Promise.all(
           parsedTeamIds.map(async (teamId) => {
-            const allocatedCount = await Order.countDocuments({
-              ...query,
-              "team.teamId": teamId,
-              status: { $in: ["Allocated", "Assign", "Completed", "Verified"] },
-            });
-            const completionCount = await Order.countDocuments({
-              ...query,
-              "team.teamId": teamId,
-              status: { $in: ["Completed", "Verified"] },
-            });
-            return { teamId, allocatedCount, completionCount };
+            try {
+              const allocatedCount = await Order.countDocuments({
+                ...query,
+                "team.teamId": teamId,
+                status: { $in: ["Allocated", "Assign", "Completed", "Verified"] },
+              });
+              const latestCompletedOrder = await Order.findOne({
+                ...query,
+                "team.teamId": teamId,
+                status: { $in: ["Completed", "Verified"] },
+              })
+                .sort({ "team.completionDate": -1 })
+                .select("team.completionDate");
+              
+              const completionDate = latestCompletedOrder?.team?.completionDate || null;
+               
+              console.log("Latest completed order query result:", latestCompletedOrder);
+              console.log("Completion date:", completionDate);
+              
+              const completionCount = await Order.countDocuments({
+                ...query,
+                "team.teamId": teamId,
+                status: { $in: ["Completed", "Verified"] },
+              });
+              return {
+                teamId,
+                allocatedCount,
+                completionCount,
+                completionDate: completionDate, // Assign the fetched date here
+              };
+            } catch (err) {
+              console.error(`Error processing teamId ${teamId}:`, err);
+              return { teamId, allocatedCount: 0, completionCount: 0, completionDate: null };
+            }
           })
         );
-  
+        
+          
         // Calculate totals for all teams
         const totalAllocatedCount = teamCounts.reduce((sum, team) => sum + team.allocatedCount, 0);
         const totalCompletedCount = teamCounts.reduce((sum, team) => sum + team.completionCount, 0);
@@ -427,7 +462,6 @@ console.log("Order Type 299 Count:", orderType299Count);
         // Get allocated count and completion count for the team
         const teamAllocatedCount = await Order.countDocuments({ ...query, status: "Allocated" });
   
-        // Fetch members in the team
         const membersWithCounts = await Order.aggregate([
           {
             $match: {
@@ -441,20 +475,36 @@ console.log("Order Type 299 Count:", orderType299Count);
               _id: "$member.memberId",
               memberName: { $first: "$member.memberName" },
               assignedCount: {
-                $sum: { $cond: [{ $eq: ["$status", "Assign"] }, 1, 0] },
+                $sum: { $cond: [{ $in: ["$status", ["Assign", "Completed", "Verified"]] }, 1, 0] },
               },
               completedCount: {
                 $sum: { $cond: [{ $in: ["$status", ["Completed", "Verified"]] }, 1, 0] },
               },
+              lastCompletionDate: { $max: "$member.completionDate" }, // Get the latest completion date
             },
           },
         ]);
+        
+        
   
         const teamCompletionCount = await Order.countDocuments({
           ...query,
           status: { $in: ["Completed", "Verified"] },
         });
   
+         // Fetch orderType 149 and 299 counts
+         const orderType149Count = await Order.countDocuments({
+          createdAt: { $gte: startDate, $lte: end },
+          orderType: 149,
+          "team.teamId": teamId, // Filter for this team only
+        });
+
+        const orderType299Count = await Order.countDocuments({
+          createdAt: { $gte: startDate, $lte: end },
+          orderType: 299,
+          "team.teamId": teamId, // Filter for this team only
+        });
+
         // Get total orders for the day
         const totalOrders = await Order.countDocuments(query);
   
@@ -465,8 +515,10 @@ console.log("Order Type 299 Count:", orderType299Count);
           teamCompletionCount,
           memberCounts: membersWithCounts,
           totalOrders, // Total orders for the day
+          orderType149Count, // Count for orderType 149
+          orderType299Count, // Count for orderType 299
         };
-  
+  console.log("Response", response)
         return res.json(response);
       }
     } catch (error) {
@@ -540,16 +592,20 @@ router.patch('/update-order-status', authenticateToken, async (req, res) => {
 
     console.log('Fetched order:', order);
 
-    // If the status is already 'Completed', return early
     if (order.status === 'Completed') {
       console.log('Order already marked as Completed:', order);
       return res.status(400).json({ message: 'Order status already updated to Completed' });
     }
 
-      // Update status from 'Assign' to 'Completed'
     if (order.status === 'Assign') {
       order.status = 'Completed';
       console.log('Order status updated to Completed:', order);
+
+      // Update the completion date for both team and member
+      const completionDate = new Date();
+      order.team.completionDate = completionDate;
+      order.member.completionDate = completionDate;
+      console.log('Completion date updated:', completionDate);
 
       // Update the profit field
       order.profit = {
@@ -563,8 +619,8 @@ router.patch('/update-order-status', authenticateToken, async (req, res) => {
     await order.save();
     console.log('Updated order:', order);
 
-    // Recalculate the allocated lead counts and completed count after status update
-    const userId = req.user.id; // Extract user ID from token
+    // Recalculate lead counts
+    const userId = req.user.id;
     console.log('Extracted userId:', userId);
 
     if (!userId) {
@@ -573,7 +629,6 @@ router.patch('/update-order-status', authenticateToken, async (req, res) => {
 
     const orders = await Order.find({ "member.memberId": userId });
     console.log('Orders fetched for userId:', userId);
-    console.log('Orders:', orders);
 
     const allocatedLeadCounts = orders.length;
     const completedCount = orders.filter(
@@ -595,6 +650,7 @@ router.patch('/update-order-status', authenticateToken, async (req, res) => {
   }
 });
 
+
 // Revert order status
 router.patch('/revert-order-status', authenticateToken, async (req, res) => {
   try {
@@ -614,24 +670,29 @@ router.patch('/revert-order-status', authenticateToken, async (req, res) => {
 
     console.log('Fetched order for revert:', order);
 
-   // Revert status from 'Completed' to 'Assign'
-   if (order.status === 'Completed') {
-    order.status = 'Assign';
-    console.log('Order status reverted to Assign:', order);
+    if (order.status === 'Completed') {
+      order.status = 'Assign';
+      console.log('Order status reverted to Assign:', order);
 
-    // Clear the profit field
-    order.profit = {
-      commission: null,
-      profitBehindOrder: null,
-      membersProfit: null,
-    };
-    console.log('Profit field cleared:', order.profit);
-  }
+      // Remove the completion date from both team and member
+      order.team.completionDate = null;
+      order.member.completionDate = null;
+      console.log('Completion date removed');
+
+      // Clear the profit field
+      order.profit = {
+        commission: null,
+        profitBehindOrder: null,
+        membersProfit: null,
+      };
+      console.log('Profit field cleared:', order.profit);
+    }
+
     await order.save();
     console.log('Reverted order:', order);
 
-    // Recalculate the allocated lead counts and completed count after status revert
-    const userId = req.user.id; // Extract user ID from token
+    // Recalculate lead counts
+    const userId = req.user.id;
     console.log('Extracted userId:', userId);
 
     if (!userId) {
@@ -640,7 +701,6 @@ router.patch('/revert-order-status', authenticateToken, async (req, res) => {
 
     const orders = await Order.find({ "member.memberId": userId });
     console.log('Orders fetched for userId:', userId);
-    console.log('Orders:', orders);
 
     const allocatedLeadCounts = orders.length;
     const completedCount = orders.filter(
@@ -661,6 +721,7 @@ router.patch('/revert-order-status', authenticateToken, async (req, res) => {
     res.status(500).json({ message: 'Internal Server Error' });
   }
 });
+
 
 
 router.get('/orders', authenticateToken, async (req, res) => {

@@ -78,7 +78,7 @@ router.post("/allocate-orders", authenticateToken, async (req, res) => {
           $set: {
             "team.teamId": teamId,
             "team.teamName":teamName, // Assuming teamName is unique
-            "team.allocateDate": date(),
+            "team.allocateDate": new Date(),
             status: "Allocated",
           },
         }
@@ -710,7 +710,7 @@ router.get('/orders', authenticateToken, async (req, res) => {
 
     // Fetching orders
     const orders = await Order.find(filter).select(
-      'orderId status coupon link orderType team profit'
+      'orderId status coupon link orderType team profit member'
     );
 
     console.log('Raw orders fetched:', orders);
@@ -724,6 +724,7 @@ router.get('/orders', authenticateToken, async (req, res) => {
       orderType: order.orderType,
       teamId: order.team?.teamId || null,
       teamName: order.team?.teamName || null,
+      memberName: order.member?.memberName || null,
       teamCompletionDate: order.team?.completionDate || null,
       profitBehindOrder: order.profit?.profitBehindOrder || null,
       membersProfit: order.profit?.membersProfit || null,

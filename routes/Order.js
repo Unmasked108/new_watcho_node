@@ -78,7 +78,7 @@ router.post("/allocate-orders", authenticateToken, async (req, res) => {
           $set: {
             "team.teamId": teamId,
             "team.teamName":teamName, // Assuming teamName is unique
-            "team.allocateDate": date(),
+            "team.allocateDate":new Date(),
             status: "Allocated",
           },
         }

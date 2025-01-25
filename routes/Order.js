@@ -350,18 +350,42 @@ router.post('/orders', authenticateToken, async (req, res) => {
           console.log("Error: Invalid or missing teamIds.");
           return res.status(400).json({ error: "Invalid or missing teamIds." });
         }
+        const totalOrders = await Order.countDocuments({
+          createdAt: { $gte: startDate, $lte: end },
+        });
+        console.log("Total Orders for the day:", totalOrders);
+
+
+        const parsedTeamIds = JSON.parse(teamIds);
   
-        query["team.teamId"] = { $in: JSON.parse(teamIds) };
+        query["team.teamId"] = { $in: parsedTeamIds };
   
         console.log("Admin Query after adding teamIds filter:", query);
   
+
+// Construct the query for orderType149Count and orderType299Count
+// Construct the query for orderType149Count and orderType299Count
+const orderType149Count = await Order.countDocuments({
+  createdAt: { $gte: startDate, $lte: end }, // Adjusted to match date range
+  orderType: 149, // Filter for orderType 149
+});
+
+const orderType299Count = await Order.countDocuments({
+  createdAt: { $gte: startDate, $lte: end }, // Adjusted to match date range
+  orderType: 299, // Filter for orderType 299
+});
+
+
+console.log("Order Type 149 Count:", orderType149Count);
+console.log("Order Type 299 Count:", orderType299Count);
+
         // Get allocated count and completion count per team
         const teamCounts = await Promise.all(
-          JSON.parse(teamIds).map(async (teamId) => {
+          parsedTeamIds.map(async (teamId) => {
             const allocatedCount = await Order.countDocuments({
               ...query,
               "team.teamId": teamId,
-              status: "Allocated",
+              status: { $in: ["Allocated", "Assign", "Completed", "Verified"] },
             });
             const completionCount = await Order.countDocuments({
               ...query,
@@ -372,11 +396,23 @@ router.post('/orders', authenticateToken, async (req, res) => {
           })
         );
   
+        // Calculate totals for all teams
+        const totalAllocatedCount = teamCounts.reduce((sum, team) => sum + team.allocatedCount, 0);
+        const totalCompletedCount = teamCounts.reduce((sum, team) => sum + team.completionCount, 0);
+  
+        // Get total orders for the day
+  
         const response = {
           success: true,
           role,
           teamCounts, // Return counts per team
+          totalAllocatedCount, // Total allocated count for all teams
+          totalCompletedCount, // Total completed count for all teams
+          totalOrders, // Total orders for the day
+          orderType149Count, // Count for orderType 149
+          orderType299Count, // Count for orderType 299
         };
+  
         console.log("Response for Admin:", response);
         return res.json(response);
       } else if (role === "TeamLeader") {
@@ -391,25 +427,25 @@ router.post('/orders', authenticateToken, async (req, res) => {
   
         // Fetch members in the team
         const membersWithCounts = await Order.aggregate([
-          { 
-            $match: { 
+          {
+            $match: {
               ...query,
               "team.teamId": teamId,
-              "member.memberId": { $exists: true }
-            }
+              "member.memberId": { $exists: true },
+            },
           },
-          { 
+          {
             $group: {
               _id: "$member.memberId",
               memberName: { $first: "$member.memberName" },
-              assignedCount: { 
-                $sum: { $cond: [{ $eq: ["$status", "Assign"] }, 1, 0] } 
+              assignedCount: {
+                $sum: { $cond: [{ $eq: ["$status", "Assign"] }, 1, 0] },
               },
-              completedCount: { 
-                $sum: { $cond: [{ $in: ["$status", ["Completed", "Verified"]] }, 1, 0] } 
-              }
-            }
-          }
+              completedCount: {
+                $sum: { $cond: [{ $in: ["$status", ["Completed", "Verified"]] }, 1, 0] },
+              },
+            },
+          },
         ]);
   
         const teamCompletionCount = await Order.countDocuments({
@@ -417,18 +453,20 @@ router.post('/orders', authenticateToken, async (req, res) => {
           status: { $in: ["Completed", "Verified"] },
         });
   
+        // Get total orders for the day
+        const totalOrders = await Order.countDocuments(query);
+  
         const response = {
           success: true,
           role,
           teamAllocatedCount,
           teamCompletionCount,
-          memberCounts: membersWithCounts
+          memberCounts: membersWithCounts,
+          totalOrders, // Total orders for the day
         };
   
         return res.json(response);
-      } 
-      
-      // ... [rest of the code remains the same]
+      }
     } catch (error) {
       console.error("Error fetching orders:", error);
       res.status(500).json({ error: "Internal server error." });
@@ -506,10 +544,18 @@ router.patch('/update-order-status', authenticateToken, async (req, res) => {
       return res.status(400).json({ message: 'Order status already updated to Completed' });
     }
 
-    // Update status from 'Assign' to 'Completed'
+      // Update status from 'Assign' to 'Completed'
     if (order.status === 'Assign') {
       order.status = 'Completed';
       console.log('Order status updated to Completed:', order);
+
+      // Update the profit field
+      order.profit = {
+        commission: 10,
+        profitBehindOrder: order.orderType === 149 ? 71 : order.orderType === 299 ? 61 : 0,
+        membersProfit: 10,
+      };
+      console.log('Profit field updated:', order.profit);
     }
 
     await order.save();
@@ -566,12 +612,19 @@ router.patch('/revert-order-status', authenticateToken, async (req, res) => {
 
     console.log('Fetched order for revert:', order);
 
-    // Revert status from 'Completed' to 'Assign'
-    if (order.status === 'Completed') {
-      order.status = 'Assign';
-      console.log('Order status reverted to Assign:', order);
-    }
+   // Revert status from 'Completed' to 'Assign'
+   if (order.status === 'Completed') {
+    order.status = 'Assign';
+    console.log('Order status reverted to Assign:', order);
 
+    // Clear the profit field
+    order.profit = {
+      commission: null,
+      profitBehindOrder: null,
+      membersProfit: null,
+    };
+    console.log('Profit field cleared:', order.profit);
+  }
     await order.save();
     console.log('Reverted order:', order);
 
@@ -608,4 +661,86 @@ router.patch('/revert-order-status', authenticateToken, async (req, res) => {
 });
 
   
+
+router.get("/result", authenticateToken, async (req, res) => {
+  try {
+    const { date, paidStatus, teamName } = req.query;
+    const { role } = req.user;
+
+    if (!date) {
+      return res.status(400).json({ error: "Date is required." });
+    }
+
+    // Parse date range
+    const startDate = new Date(date);
+    const endDate = new Date(date);
+    startDate.setHours(0, 0, 0, 0);
+    endDate.setHours(23, 59, 59, 999);
+
+    let query = {
+      createdAt: { $gte: startDate, $lte: endDate },
+    };
+
+    // Filter by `paidStatus`
+    if (paidStatus === "Paid") {
+      query.status = { $in: ["Completed", "Verified"] };
+    } else if (paidStatus === "Unpaid") {
+      query.status = { $in: ["Allocated", "Assign"] };
+    } else {
+      query.status = { $in: ["Allocated", "Assign", "Completed", "Verified"] };
+    }
+
+    // Filter by `teamName`
+    if (teamName) {
+      query["team.teamName"] = teamName;
+    }
+
+    // Fetch orders
+    const orders = await Order.find(query).lean();
+
+    // Process data to include required fields
+    const processedOrders = orders.map(order => ({
+      orderId: order.orderId || 'N/A',
+      coupon: order.coupon || 'N/A',
+      orderLink: order.link || 'N/A',
+      orderType: order.orderType || 0,
+
+      // Fetch teamName and memberName
+      allocatedTeamName: order.team?.teamName || 'N/A',
+      allocatedMember: order.member?.memberName || 'Not Allocated',
+
+      // Determine payment status
+      paymentStatus: ["Completed", "Verified"].includes(order.status) ? "Paid" : "Unpaid",
+
+      // Fetch profit values
+      profit: order.profit?.profitBehindOrder || 0,
+      memberProfit: order.profit?.membersProfit || 0,
+
+      verification: order.status || 'N/A',
+    }));
+
+    // Calculate summary stats
+    const totalOrders = orders.length;
+    const paidOrders = orders.filter(order =>
+      ["Completed", "Verified"].includes(order.status)
+    ).length;
+    const unpaidOrders = orders.filter(order =>
+      ["Allocated", "Assign"].includes(order.status)
+    ).length;
+
+    return res.json({
+      success: true,
+      role,
+      totalOrders,
+      paidOrders,
+      unpaidOrders,
+      orders: processedOrders,
+    });
+  } catch (error) {
+    console.error("Error fetching orders:", error);
+    res.status(500).json({ error: "Internal server error." });
+  }
+});
+
+
   module.exports = router;

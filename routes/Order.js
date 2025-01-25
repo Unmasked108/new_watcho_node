@@ -829,7 +829,7 @@ router.get('/orders/count', authenticateToken, async (req, res) => {
     // Query for total allocated orders
     const totalAllocatedLeads = await Order.countDocuments({
       ...query,
-      status: { $in: ['Allocated', 'Assign'] }, 
+      status: { $in: ['Allocated', 'Assign','Completed','Verified'] }, 
     });
 
     // Send response
